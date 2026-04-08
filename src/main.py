@@ -506,14 +506,20 @@ async def main():
         raise
 
 
+import os
+
 if __name__ == "__main__":
-    # MCP 서버로 실행 (stdio 모드)
-    # HTTP 서버로 실행하려면 환경 변수 HTTP_MODE=1 설정
-    if os.environ.get("HTTP_MODE") == "1":
-        import uvicorn
-        port = int(os.environ.get('PORT', 8096))
-        uvicorn.run("src.main:api", host="0.0.0.0", port=port, reload=False)
+    http_mode = os.getenv("HTTP_MODE") == "1"
+    port = int(os.getenv("PORT", "10000"))
+
+    if http_mode:
+        print(f"Starting HTTP MCP server on port {port}")
+        mcp.run(
+            transport="http",
+            host="0.0.0.0",
+            port=port
+        )
     else:
-        # MCP stdio 모드
-        asyncio.run(main())
+        print("Starting STDIO MCP server")
+        mcp.run()
 
