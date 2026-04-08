@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "korean-law": {
+      "command": "C:\\Users\\TT\\Downloads\\korean-law-mcp-main\\korean-law-mcp-main\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "src.main"],
+      "cwd": "C:\\Users\\TT\\Downloads\\korean-law-mcp-main\\korean-law-mcp-main",
+      "env": {
+        "LAW_API_KEY": "a308563136394597baec256055c70524"
+      }
+    }
+  }
+}

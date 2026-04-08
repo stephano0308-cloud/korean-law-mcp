@@ -1,0 +1,12 @@
+fastmcp
+uvicorn
+pydantic
+python-dotenv
+requests
+certifi
+truststore
+beautifulsoup4
+lxml
+cachetools
+python-dateutil
+fastapi
