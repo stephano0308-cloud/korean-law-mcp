@@ -11,13 +11,24 @@ from fastmcp import FastMCP
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from .tools import (
-    search_law, 
-    get_law_detail, 
-    search_precedent, 
+    search_law,
+    get_law_detail,
+    search_precedent,
     get_precedent_detail,
     search_administrative_rule
 )
-from typing import Optional
+from .hwpx_parser import parse_hwpx_from_path
+from .disposition_analyzer import analyze_disposition
+from .historical_law_search import (
+    search_historical_law,
+    get_historical_law_detail,
+    get_specific_articles,
+)
+from .tax_law_agent import (
+    research_tax_law_from_file,
+    research_tax_law_from_text,
+)
+from typing import Optional, List
 from dotenv import load_dotenv
 from contextlib import contextmanager
 
@@ -63,6 +74,36 @@ class AdminRuleSearchRequest(BaseModel):
     query: str = Field(..., description="검색할 행정규칙 키워드")
     page: int = Field(1, description="페이지 번호 (기본값: 1)", ge=1)
     page_size: int = Field(10, description="페이지당 결과 수 (기본값: 10, 최대: 50)", ge=1, le=50)
+
+
+class HistoricalLawSearchRequest(BaseModel):
+    law_name: str = Field(..., description="검색할 법령명 (예: '소득세법', '법인세법 시행령')")
+    effective_date: str = Field(..., description="시행일자 기준일 (YYYYMMDD 형식, 예: '20200301')")
+
+
+class HistoricalLawDetailRequest(BaseModel):
+    law_id: str = Field(..., description="법령 ID (연혁법령 검색 결과에서 얻은 법령ID)")
+
+
+class SpecificArticlesRequest(BaseModel):
+    law_id: str = Field(..., description="법령 ID")
+    article_numbers: List[str] = Field(..., description="조문번호 목록 (예: ['94', '95', '96'])")
+
+
+class TaxLawResearchFileRequest(BaseModel):
+    file_path: str = Field(..., description="처분개요 HWPX 파일의 절대 경로")
+
+
+class TaxLawResearchTextRequest(BaseModel):
+    text: str = Field(..., description="처분개요 텍스트 내용")
+
+
+class ParseHwpxRequest(BaseModel):
+    file_path: str = Field(..., description="HWPX 파일의 절대 경로")
+
+
+class AnalyzeDispositionRequest(BaseModel):
+    text: str = Field(..., description="처분개요 텍스트 내용")
 
 
 # 실제 구현 함수들
@@ -378,6 +419,54 @@ async def call_tool_http(tool_name: str, request_data: dict):
                 search_administrative_rule, query, page, page_size, arguments=request_data
             )
 
+        # ── 세법 연구 에이전트 도구 ──
+
+        if tool_name == "parse_hwpx_tool":
+            fp = request_data.get("file_path")
+            if not fp:
+                return {"error": "Missing required parameter: file_path"}
+            return await run_sync(parse_hwpx_from_path, fp)
+
+        if tool_name == "analyze_disposition_tool":
+            txt = request_data.get("text")
+            if not txt:
+                return {"error": "Missing required parameter: text"}
+            return await run_sync(analyze_disposition, txt)
+
+        if tool_name == "search_historical_law_tool":
+            ln = request_data.get("law_name")
+            ed = request_data.get("effective_date")
+            if not ln or not ed:
+                return {"error": "Missing required parameters: law_name, effective_date"}
+            return await run_with_env(search_historical_law, ln, ed, arguments=request_data)
+
+        if tool_name == "get_historical_law_detail_tool":
+            lid = request_data.get("law_id")
+            if not lid:
+                return {"error": "Missing required parameter: law_id"}
+            return await run_with_env(get_historical_law_detail, lid, arguments=request_data)
+
+        if tool_name == "get_specific_articles_tool":
+            lid = request_data.get("law_id")
+            ans = request_data.get("article_numbers")
+            if not lid or not ans:
+                return {"error": "Missing required parameters: law_id, article_numbers"}
+            if not isinstance(ans, list):
+                ans = [str(ans)]
+            return await run_with_env(get_specific_articles, lid, ans, arguments=request_data)
+
+        if tool_name == "research_tax_law_tool":
+            fp = request_data.get("file_path")
+            if not fp:
+                return {"error": "Missing required parameter: file_path"}
+            return await run_with_env(research_tax_law_from_file, fp, arguments=request_data)
+
+        if tool_name == "research_tax_law_from_text_tool":
+            txt = request_data.get("text")
+            if not txt:
+                return {"error": "Missing required parameter: text"}
+            return await run_with_env(research_tax_law_from_text, txt, arguments=request_data)
+
         return {"error": "Tool not found"}
     except Exception as e:
         mcp_logger.exception("Error in call_tool_http: %s", str(e))
@@ -491,11 +580,129 @@ async def search_administrative_rule_tool(
     return await search_administrative_rule_impl(req, None)
 
 
+# ────────────────────────────────────────────────────────────────
+# 세법 연구 에이전트 MCP 도구들
+# ────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def parse_hwpx_tool(file_path: str):
+    """
+    HWPX(한글) 파일을 파싱하여 텍스트를 추출합니다.
+    처분개요 등 한글 문서의 내용을 텍스트로 변환합니다.
+
+    Args:
+        file_path: HWPX 파일의 절대 경로
+
+    Returns:
+        추출된 텍스트, 섹션 목록, 테이블 데이터
+    """
+    return await asyncio.to_thread(parse_hwpx_from_path, file_path)
+
+
+@mcp.tool()
+async def analyze_disposition_tool(text: str):
+    """
+    처분개요 텍스트를 분석하여 세목, 처분일자, 과세기간, 관련 법조문 등
+    핵심 정보를 자동 추출합니다.
+
+    Args:
+        text: 처분개요 텍스트 내용
+
+    Returns:
+        분석 결과 (세목, 처분일자, 과세기간, 처분유형, 세액, 법조문 인용, 관련 법령 등)
+    """
+    return await asyncio.to_thread(analyze_disposition, text)
+
+
+@mcp.tool()
+async def search_historical_law_tool(law_name: str, effective_date: str):
+    """
+    특정 시점에 시행 중이던 연혁법령을 검색합니다.
+    처분 당시 적용되었던 법령 버전을 찾을 때 사용합니다.
+
+    Args:
+        law_name: 법령명 (예: '소득세법', '법인세법 시행령')
+        effective_date: 시행일자 기준일 (YYYYMMDD 형식, 예: '20200301')
+
+    Returns:
+        해당 시점에 유효했던 법령 정보 (법령ID, 시행일자, 공포일자 등)
+    """
+    return await asyncio.to_thread(search_historical_law, law_name, effective_date)
+
+
+@mcp.tool()
+async def get_historical_law_detail_tool(law_id: str):
+    """
+    특정 연혁법령 버전의 상세 정보(전문 및 조문)를 조회합니다.
+    search_historical_law_tool로 찾은 법령ID를 사용합니다.
+
+    Args:
+        law_id: 법령 ID (연혁법령 검색 결과에서 얻은 법령ID)
+
+    Returns:
+        법령 상세 정보 (법령명, 시행일자, 전체 조문 내용)
+    """
+    return await asyncio.to_thread(get_historical_law_detail, law_id)
+
+
+@mcp.tool()
+async def get_specific_articles_tool(law_id: str, article_numbers: List[str]):
+    """
+    특정 법령에서 지정된 조문만 추출합니다.
+    전체 법령이 아닌 필요한 조문만 조회할 때 사용합니다.
+
+    Args:
+        law_id: 법령 ID
+        article_numbers: 조문번호 목록 (예: ['94', '95', '96'])
+
+    Returns:
+        지정된 조문의 전문 내용
+    """
+    return await asyncio.to_thread(get_specific_articles, law_id, article_numbers)
+
+
+@mcp.tool()
+async def research_tax_law_tool(file_path: str):
+    """
+    처분개요 HWPX 파일을 분석하여 처분 당시 적용된 관련 세법 조문을
+    자동으로 찾아 정리하는 통합 에이전트 도구입니다.
+
+    워크플로우:
+    1. HWPX 파일 파싱 → 텍스트 추출
+    2. 처분개요 분석 → 세목, 처분일자, 법조문 인용 등 추출
+    3. 연혁법령 검색 → 처분 당시 시행 중이던 법령 버전 식별
+    4. 관련 조문 조회 → 해당 법령에서 관련 조문 전문 조회
+    5. 결과 정리 → 구조화된 보고서 생성
+
+    Args:
+        file_path: 처분개요 HWPX 파일의 절대 경로
+
+    Returns:
+        처분개요 분석 결과 및 관련 세법 조문 전문을 포함한 보고서
+    """
+    return await asyncio.to_thread(research_tax_law_from_file, file_path)
+
+
+@mcp.tool()
+async def research_tax_law_from_text_tool(text: str):
+    """
+    처분개요 텍스트를 직접 입력받아 관련 세법 조문을 자동으로 찾아 정리합니다.
+    HWPX 파일이 아닌 텍스트를 직접 붙여넣을 때 사용합니다.
+
+    Args:
+        text: 처분개요 텍스트 내용
+
+    Returns:
+        처분개요 분석 결과 및 관련 세법 조문 전문을 포함한 보고서
+    """
+    return await asyncio.to_thread(research_tax_law_from_text, text)
+
+
 async def main():
     """MCP 서버를 실행합니다."""
     print("MCP Korean Law & Precedent Server starting...", file=sys.stderr)
     print("Server: korean-law-service", file=sys.stderr)
-    print("Available tools: health, search_law_tool, get_law_detail_tool, search_precedent_tool, get_precedent_detail_tool, search_administrative_rule_tool", file=sys.stderr)
+    print("Available tools: health, search_law_tool, get_law_detail_tool, search_precedent_tool, get_precedent_detail_tool, search_administrative_rule_tool, parse_hwpx_tool, analyze_disposition_tool, search_historical_law_tool, get_historical_law_detail_tool, get_specific_articles_tool, research_tax_law_tool, research_tax_law_from_text_tool", file=sys.stderr)
     
     try:
         await mcp.run_stdio_async()

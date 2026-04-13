@@ -1,6 +1,6 @@
 [project]
 name = "korean-law-mcp"
-version = "1.0.0"
+version = "2.0.0"
 description = "MCP Server for Korean Law & Precedent Search using National Law Information Center API"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,7 +11,8 @@ dependencies = [
     "python-dotenv",
     "requests",
     "cachetools",
-    "fastapi"
+    "fastapi",
+    "lxml",
 ]
 
 [project.optional-dependencies]
