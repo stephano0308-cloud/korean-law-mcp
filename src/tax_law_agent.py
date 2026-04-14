@@ -12,6 +12,7 @@
 5. 결과 정리 → 구조화된 보고서 생성
 """
 import logging
+import os
 from typing import Dict, List, Optional
 from .hwpx_parser import parse_hwpx_from_path, parse_hwpx_from_bytes
 from .disposition_analyzer import analyze_disposition
@@ -38,6 +39,8 @@ def research_tax_law_from_file(
     Returns:
         분석 결과 딕셔너리 (처분개요 분석, 관련 법령, 조문 전문 포함)
     """
+    # 상대경로를 절대경로로 변환
+    file_path = os.path.abspath(file_path)
     logger.info("세법 연구 에이전트 시작 | file=%s", file_path)
 
     # Step 1: HWPX 파일 파싱

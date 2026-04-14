@@ -10,19 +10,16 @@ import os
 import re
 import logging
 from typing import Optional
-from lxml import etree
+import xml.etree.ElementTree as ET
+
+# lxml이 있으면 사용, 없으면 표준 라이브러리 사용
+try:
+    from lxml import etree as lxml_etree
+    USE_LXML = True
+except ImportError:
+    USE_LXML = False
 
 logger = logging.getLogger("law-mcp")
-
-# HWPX 내부 XML 네임스페이스 (OWPML 표준)
-HWPX_NAMESPACES = {
-    "hp": "http://www.hancom.co.kr/hwpml/2011/paragraph",
-    "hs": "http://www.hancom.co.kr/hwpml/2011/section",
-    "hh": "http://www.hancom.co.kr/hwpml/2011/head",
-    "hc": "http://www.hancom.co.kr/hwpml/2011/core",
-    "hwpml": "http://www.hancom.co.kr/hwpml/2011/hwpml",
-    "opf": "http://www.hancom.co.kr/hwpml/2011/opf",
-}
 
 
 def parse_hwpx_from_path(file_path: str) -> dict:
@@ -41,6 +38,9 @@ def parse_hwpx_from_path(file_path: str) -> dict:
             "error": 에러 메시지 (실패 시)
         }
     """
+    # 상대경로를 절대경로로 변환
+    file_path = os.path.abspath(file_path)
+
     if not os.path.exists(file_path):
         return {"error": f"파일을 찾을 수 없습니다: {file_path}"}
 
@@ -115,6 +115,8 @@ def _extract_from_zip(zf: zipfile.ZipFile, file_name: str) -> dict:
             logger.warning("섹션 파일 파싱 실패 (%s): %s", section_file, str(e))
 
     full_text = "\n\n".join(all_text_parts)
+    # Windows cp949 호환을 위해 특수 유니코드 문자 정규화
+    full_text = _normalize_unicode(full_text)
 
     if not full_text.strip():
         return {
@@ -127,10 +129,30 @@ def _extract_from_zip(zf: zipfile.ZipFile, file_name: str) -> dict:
 
     return {
         "text": full_text,
-        "sections": sections,
+        "sections": [_normalize_unicode(s) for s in sections],
         "tables": tables,
         "file_name": file_name,
     }
+
+
+def _normalize_unicode(text: str) -> str:
+    """
+    Windows cp949 인코딩에서 문제를 일으키는 특수 유니코드 문자를 대체합니다.
+    """
+    replacements = {
+        "\u2024": ".",    # ONE DOT LEADER → .
+        "\u2025": "..",   # TWO DOT LEADER → ..
+        "\u2026": "...",  # HORIZONTAL ELLIPSIS → ...
+        "\u00a0": " ",    # NO-BREAK SPACE → space
+        "\u3000": " ",    # IDEOGRAPHIC SPACE → space
+        "\u200b": "",     # ZERO WIDTH SPACE → remove
+        "\u200c": "",     # ZERO WIDTH NON-JOINER → remove
+        "\u200d": "",     # ZERO WIDTH JOINER → remove
+        "\ufeff": "",     # BOM → remove
+    }
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
+    return text
 
 
 def _parse_section_xml(xml_data: bytes) -> tuple:
@@ -140,17 +162,19 @@ def _parse_section_xml(xml_data: bytes) -> tuple:
     Returns:
         (텍스트, 테이블 리스트) 튜플
     """
-    try:
-        root = etree.fromstring(xml_data)
-    except etree.XMLSyntaxError:
-        # BOM이 있는 경우 제거 후 재시도
-        if xml_data.startswith(b"\xef\xbb\xbf"):
-            root = etree.fromstring(xml_data[3:])
-        else:
-            raise
+    # BOM 제거
+    if xml_data.startswith(b"\xef\xbb\xbf"):
+        xml_data = xml_data[3:]
 
-    # 네임스페이스 자동 감지
-    nsmap = _detect_namespaces(root)
+    if USE_LXML:
+        try:
+            root = lxml_etree.fromstring(xml_data)
+        except lxml_etree.XMLSyntaxError:
+            # recover 모드로 재시도
+            parser = lxml_etree.XMLParser(recover=True)
+            root = lxml_etree.fromstring(xml_data, parser=parser)
+    else:
+        root = ET.fromstring(xml_data.decode("utf-8", errors="replace"))
 
     paragraphs = []
     tables = []
@@ -160,38 +184,15 @@ def _parse_section_xml(xml_data: bytes) -> tuple:
         tag = _local_tag(elem.tag)
 
         if tag == "p":
-            para_text = _extract_paragraph_text(elem, nsmap)
+            para_text = _extract_paragraph_text(elem, {})
             if para_text.strip():
                 paragraphs.append(para_text)
         elif tag == "tbl":
-            table_data = _extract_table(elem, nsmap)
+            table_data = _extract_table(elem, {})
             if table_data:
                 tables.append(table_data)
 
     return "\n".join(paragraphs), tables
-
-
-def _detect_namespaces(root) -> dict:
-    """
-    XML 루트에서 실제 사용된 네임스페이스를 감지합니다.
-    """
-    nsmap = {}
-    if hasattr(root, "nsmap"):
-        nsmap = dict(root.nsmap)
-    # None 키 제거 (기본 네임스페이스)
-    nsmap.pop(None, None)
-
-    # 알려진 네임스페이스 매핑 보완
-    for prefix, uri in HWPX_NAMESPACES.items():
-        if prefix not in nsmap:
-            # 실제 URI가 있는지 확인
-            for p, u in nsmap.items():
-                if "paragraph" in u and prefix == "hp":
-                    nsmap["hp"] = u
-                elif "section" in u and prefix == "hs":
-                    nsmap["hs"] = u
-
-    return nsmap
 
 
 def _local_tag(tag: str) -> str:
