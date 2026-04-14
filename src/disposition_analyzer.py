@@ -233,41 +233,90 @@ def _extract_tax_amount(text: str) -> Optional[str]:
 def _extract_law_references(text: str) -> List[Dict]:
     """
     텍스트에서 법조문 인용을 추출합니다.
-    예: "소득세법 제94조 제1항 제2호", "같은 법 시행령 제162조"
+    "같은 법", "동법" 등의 참조를 실제 법령명으로 해석합니다.
+    예: "소득세법 제94조 제1항", "같은 법 시행령 제162조" → 소득세법 시행령 제162조
     """
     references = []
 
-    # 법령명 + 조문 패턴
-    law_article_patterns = [
-        # "소득세법 제94조 제1항 제2호 가목"
+    # 줄바꿈을 공백으로 치환하여 조문 인용이 줄 경계에 걸쳐도 정확히 매칭
+    text = re.sub(r"\s+", " ", text)
+
+    # 법령명 + 조문 패턴 (명시적 법령명)
+    explicit_pattern = (
         r"((?:소득세법|법인세법|부가가치세법|상속세\s*및\s*증여세법|종합부동산세법|"
         r"지방세법|지방세기본법|국세기본법|국세징수법|조세특례제한법|교육세법|농어촌특별세법|"
         r"개별소비세법|인지세법|증권거래세법|관세법)"
         r"(?:\s*시행령|\s*시행규칙)?)"
-        r"\s*(제\d+조(?:의\d+)?(?:\s*제\d+항)?(?:\s*제\d+호)?(?:\s*[가-힣]목)?)",
+        r"\s*(제\d+조(?:의\d+)?(?:\s*제\d+항)?(?:\s*제\d+호)?(?:\s*[가-힣]목)?)"
+    )
 
-        # "같은 법 제XX조", "동법 제XX조"
-        r"(같은\s*(?:법|시행령|시행규칙)|동법|동\s*시행령)"
-        r"\s*(제\d+조(?:의\d+)?(?:\s*제\d+항)?(?:\s*제\d+호)?(?:\s*[가-힣]목)?)",
-    ]
+    # "같은 법", "동법" 등의 참조 패턴
+    relative_pattern = (
+        r"(같은\s*법\s*시행규칙|같은\s*법\s*시행령|같은\s*시행령|같은\s*시행규칙|같은\s*법|동법\s*시행령|동\s*시행령|동법)"
+        r"\s*(제\d+조(?:의\d+)?(?:\s*제\d+항)?(?:\s*제\d+호)?(?:\s*[가-힣]목)?)"
+    )
 
-    for pattern in law_article_patterns:
-        for match in re.finditer(pattern, text):
-            law_name = match.group(1).strip()
-            article = match.group(2).strip()
+    # 1단계: 명시적 법령명 인용 추출 (위치 정보와 함께)
+    last_explicit_law = None  # "같은 법" 해석을 위한 마지막 명시적 법령명
+    all_matches = []
 
-            # 조문번호 파싱
-            article_detail = _parse_article_number(article)
+    for match in re.finditer(explicit_pattern, text):
+        law_name = match.group(1).strip()
+        article = match.group(2).strip()
+        # 기본 법령명 추출 (시행령/시행규칙 제거하여 "같은 법" 해석용)
+        base_law = re.sub(r"\s*시행령$|\s*시행규칙$", "", law_name)
+        all_matches.append({
+            "pos": match.start(),
+            "law_name": law_name,
+            "base_law": base_law,
+            "article": article,
+            "type": "explicit",
+        })
 
-            ref = {
-                "법령명": law_name,
-                "조문": article,
-                "조문상세": article_detail,
-            }
+    for match in re.finditer(relative_pattern, text):
+        ref_type = match.group(1).strip()
+        article = match.group(2).strip()
+        all_matches.append({
+            "pos": match.start(),
+            "ref_type": ref_type,
+            "article": article,
+            "type": "relative",
+        })
 
-            # 중복 방지
-            if not any(r["법령명"] == law_name and r["조문"] == article for r in references):
-                references.append(ref)
+    # 위치 순서로 정렬
+    all_matches.sort(key=lambda x: x["pos"])
+
+    # 2단계: "같은 법" 참조를 실제 법령명으로 해석
+    last_base_law = None
+    for m in all_matches:
+        if m["type"] == "explicit":
+            last_base_law = m["base_law"]
+            law_name = m["law_name"]
+            article = m["article"]
+        else:
+            # "같은 법" 류 참조 해석
+            ref_type = m["ref_type"]
+            article = m["article"]
+
+            if last_base_law is None:
+                law_name = ref_type  # 해석 불가, 원문 유지
+            elif "시행규칙" in ref_type:
+                law_name = f"{last_base_law} 시행규칙"
+            elif "시행령" in ref_type:
+                law_name = f"{last_base_law} 시행령"
+            else:
+                law_name = last_base_law
+
+        article_detail = _parse_article_number(article)
+        ref = {
+            "법령명": law_name,
+            "조문": article,
+            "조문상세": article_detail,
+        }
+
+        # 중복 방지
+        if not any(r["법령명"] == law_name and r["조문"] == article for r in references):
+            references.append(ref)
 
     return references
 
@@ -302,34 +351,16 @@ def _parse_article_number(article_str: str) -> dict:
 
 def _determine_related_laws(tax_types: List[str], law_references: List[Dict]) -> List[str]:
     """
-    세목과 법조문 인용으로부터 관련 법령 목록을 결정합니다.
+    법조문 인용에서 실제 인용된 법령 목록만 추출합니다.
+    세목 기반 추측이 아닌, 텍스트에서 실제 인용된 법령만 포함합니다.
     """
     laws = set()
 
-    # 세목 기반 법령 추가
-    for tax_type in tax_types:
-        if tax_type in TAX_LAW_NAMES:
-            for law_name in TAX_LAW_NAMES[tax_type]:
-                laws.add(law_name)
-
-    # 법조문 인용에서 법령명 추가
     for ref in law_references:
         law_name = ref["법령명"]
-        # "같은 법", "동법" 등은 제외
-        if law_name not in ("같은 법", "같은 시행령", "같은 시행규칙", "동법", "동 시행령",
-                            "법", "시행령", "시행규칙"):
+        if law_name and law_name not in ("같은 법", "같은 시행령", "같은 시행규칙",
+                                         "동법", "동 시행령", "법", "시행령", "시행규칙"):
             laws.add(law_name)
-
-    # 공통 세법 추가 (국세기본법 등)
-    if tax_types:
-        # 지방세인 경우 국세기본법 대신 지방세기본법
-        is_local_tax = any(t in ("취득세", "재산세", "지방소득세") for t in tax_types)
-        if is_local_tax:
-            laws.add("지방세기본법")
-            laws.add("지방세기본법 시행령")
-        else:
-            laws.add("국세기본법")
-            laws.add("국세기본법 시행령")
 
     return sorted(laws)
 
