@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from .mpm_law_catalog import fetch_mpm_catalog, search_mpm_catalog
 from .tools import (
     get_law_detail,
     get_precedent_detail,
@@ -32,10 +33,11 @@ from .tools import (
 
 app = FastAPI(
     title="National Civil Service HR GPT API",
-    version="1.0.0",
+    version="1.1.0",
     description=(
         "국가공무원 인사 사안 검토용 GPT Action API. "
-        "국가법령정보센터 Open API 기반으로 법령, 행정규칙, 판례를 검색한다."
+        "인사혁신처 법령정보 목록과 국가법령정보센터 Open API 기반으로 "
+        "법령, 행정규칙, 판례를 검색한다."
     ),
 )
 
@@ -104,6 +106,23 @@ class IssueKeywordResponse(BaseModel):
     note: str
 
 
+class MpmCatalogRequest(BaseModel):
+    categories: Optional[List[str]] = Field(
+        None,
+        description=(
+            "선택 카테고리. 예: law, presidential_decree, prime_minister_rule, "
+            "presidential_directive, prime_minister_directive, mpm_directive, "
+            "mpm_established_rule, mpm_notice"
+        ),
+    )
+    force_refresh: bool = Field(False, description="인사혁신처 목록 캐시를 무시하고 새로 수집할지 여부")
+
+
+class MpmCatalogSearchRequest(BaseModel):
+    query: str = Field(..., description="인사혁신처 법령정보 목록에서 검색할 키워드")
+    categories: Optional[List[str]] = Field(None, description="선택 카테고리 목록")
+
+
 def _arguments() -> Dict[str, Any]:
     """기존 tools.py와 호환되는 arguments 구조를 만든다."""
     env: Dict[str, str] = {}
@@ -124,6 +143,7 @@ async def health() -> Dict[str, Any]:
         "status": "ok",
         "service": "National Civil Service HR GPT API",
         "law_api_key": "configured" if os.getenv("LAW_API_KEY") else "missing",
+        "mpm_catalog": "enabled",
     }
 
 
@@ -136,6 +156,18 @@ async def get_core_keywords() -> Dict[str, Any]:
     }
 
 
+@app.post("/hr/mpm-catalog")
+async def get_mpm_catalog(req: MpmCatalogRequest) -> Dict[str, Any]:
+    """인사혁신처 법령정보 페이지의 법률·대통령령·총리령·훈령·예규·고시 목록을 수집한다."""
+    return await _to_thread(fetch_mpm_catalog, req.categories, req.force_refresh)
+
+
+@app.post("/hr/search-mpm-catalog")
+async def search_mpm_catalog_endpoint(req: MpmCatalogSearchRequest) -> Dict[str, Any]:
+    """인사혁신처 법령정보 목록에서 법령·행정규칙 제목을 검색한다."""
+    return await _to_thread(search_mpm_catalog, req.query, req.categories)
+
+
 @app.post("/hr/suggest-keywords", response_model=IssueKeywordResponse)
 async def suggest_keywords(req: IssueKeywordRequest) -> IssueKeywordResponse:
     """사안 문구를 바탕으로 우선 검색할 국가공무원 인사 키워드 후보를 추천한다."""
@@ -145,7 +177,6 @@ async def suggest_keywords(req: IssueKeywordRequest) -> IssueKeywordResponse:
         if any(token in text for token in issue.replace("·", " ").split()):
             recommended.extend(keywords)
 
-    # 단순 키워드 매칭 보완
     for term, keywords in HR_ISSUE_KEYWORDS.items():
         if any(k in text for k in term.split("·")):
             recommended.extend(keywords)
@@ -158,7 +189,6 @@ async def suggest_keywords(req: IssueKeywordRequest) -> IssueKeywordResponse:
             "공무원 징계령 " + text[:20],
         ]
 
-    # 순서 유지 중복 제거
     seen = set()
     unique = []
     for item in recommended:
@@ -170,7 +200,7 @@ async def suggest_keywords(req: IssueKeywordRequest) -> IssueKeywordResponse:
         core_keywords=HR_CORE_KEYWORDS,
         issue_keywords=HR_ISSUE_KEYWORDS,
         recommended_queries=unique[:10],
-        note="추천 키워드는 검색 보조용이다. 최종 판단은 실제 법령·행정규칙 원문 조회 결과로 검증해야 한다.",
+        note="추천 키워드는 검색 보조용이다. 최종 판단은 인사혁신처 목록 및 실제 법령·행정규칙 원문 조회 결과로 검증해야 한다.",
     )
 
 
