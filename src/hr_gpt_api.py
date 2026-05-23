@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from .admin_rule_detail import get_administrative_rule_detail
 from .mpm_law_catalog import fetch_mpm_catalog, search_mpm_catalog
 from .tools import (
     get_law_detail,
@@ -33,16 +34,20 @@ from .tools import (
 
 app = FastAPI(
     title="National Civil Service HR GPT API",
-    version="1.1.0",
+    version="1.2.0",
     description=(
         "국가공무원 인사 사안 검토용 GPT Action API. "
         "인사혁신처 법령정보 목록과 국가법령정보센터 Open API 기반으로 "
-        "법령, 행정규칙, 판례를 검색한다."
+        "법령, 행정규칙 원문, 판례를 검색한다."
     ),
 )
 
 
 HR_CORE_KEYWORDS = [
+    "국무총리보좌기관인사관리지침",
+    "국무총리보좌기관 인사관리지침",
+    "국무조정실 인사관리",
+    "국무총리비서실 인사관리",
     "국가공무원법",
     "공무원임용령",
     "공무원임용규칙",
@@ -57,13 +62,19 @@ HR_CORE_KEYWORDS = [
 ]
 
 HR_ISSUE_KEYWORDS: Dict[str, List[str]] = {
+    "국무조정실·국무총리보좌기관": [
+        "국무총리보좌기관인사관리지침",
+        "국무총리보좌기관 인사관리지침",
+        "국무조정실 인사관리",
+        "국무총리비서실 인사관리",
+    ],
     "채용·임용": ["국가공무원법 임용", "공무원임용령 신규채용", "공무원임용시험령 결격사유"],
-    "전보·전직·파견": ["공무원임용령 전보", "공무원임용령 전직", "국가공무원법 파견"],
-    "승진·보직": ["공무원임용령 승진", "공무원 성과평가 승진후보자", "보직관리 기준"],
-    "휴직·복직": ["국가공무원법 휴직", "공무원임용령 휴직", "질병휴직 육아휴직 복직"],
-    "복무·겸직": ["국가공무원 복무규정", "국가공무원법 겸직", "공무원 복무 징계"],
+    "전보·전직·파견": ["공무원임용령 전보", "공무원임용령 전직", "국가공무원법 파견", "국무총리보좌기관인사관리지침 전보"],
+    "승진·보직": ["공무원임용령 승진", "공무원 성과평가 승진후보자", "보직관리 기준", "국무총리보좌기관인사관리지침 보직"],
+    "휴직·복직": ["국가공무원법 휴직", "공무원임용령 휴직", "질병휴직 육아휴직 복직", "국무총리보좌기관인사관리지침 휴직 복직"],
+    "복무·겸직": ["국가공무원 복무규정", "국가공무원법 겸직", "공무원 복무 징계", "국무총리보좌기관인사관리지침 복무"],
     "보수·수당": ["공무원 보수규정", "공무원수당 등에 관한 규정", "성과상여금 지급기준"],
-    "징계·소청": ["공무원 징계령", "공무원 징계령 시행규칙", "국가공무원법 징계 소청"],
+    "징계·소청": ["공무원 징계령", "공무원 징계령 시행규칙", "국가공무원법 징계 소청", "국무총리보좌기관인사관리지침 징계"],
     "교육훈련·성과평가": ["공무원 인재개발법", "공무원 성과평가 등에 관한 규정", "근무성적평정"],
 }
 
@@ -82,6 +93,10 @@ class MultiSearchRequest(BaseModel):
 
 class LawDetailRequest(BaseModel):
     law_id: str = Field(..., description="법령 검색 결과의 법령ID")
+
+
+class AdminRuleDetailRequest(BaseModel):
+    admrul_id: str = Field(..., description="행정규칙 검색 결과의 행정규칙ID")
 
 
 class PrecedentSearchRequest(BaseModel):
@@ -144,6 +159,7 @@ async def health() -> Dict[str, Any]:
         "service": "National Civil Service HR GPT API",
         "law_api_key": "configured" if os.getenv("LAW_API_KEY") else "missing",
         "mpm_catalog": "enabled",
+        "administrative_rule_detail": "enabled",
     }
 
 
@@ -183,6 +199,7 @@ async def suggest_keywords(req: IssueKeywordRequest) -> IssueKeywordResponse:
 
     if not recommended:
         recommended = [
+            "국무총리보좌기관인사관리지침 " + text[:20],
             "국가공무원법 " + text[:20],
             "공무원임용령 " + text[:20],
             "국가공무원 복무규정 " + text[:20],
@@ -240,6 +257,12 @@ async def search_admin_rules_batch(req: MultiSearchRequest) -> Dict[str, Any]:
         result = await _to_thread(search_administrative_rule, query, req.page, req.page_size, _arguments())
         results.append({"query": query, "result": result})
     return {"results": results}
+
+
+@app.post("/hr/get-admin-rule-detail")
+async def get_admin_rule(req: AdminRuleDetailRequest) -> Dict[str, Any]:
+    """행정규칙ID로 행정규칙 본문 및 상세 정보를 조회한다."""
+    return await _to_thread(get_administrative_rule_detail, req.admrul_id, _arguments())
 
 
 @app.post("/hr/search-precedents")
