@@ -1,0 +1,16 @@
+# Render 블루프린트: 조세심판원 인사담당자 지원 MCP 서버
+# 사용법: Render 대시보드 → New → Blueprint → 이 저장소 선택
+# 배포 후 MCP 엔드포인트: https://<서비스이름>.onrender.com/mcp
+services:
+  - type: web
+    name: tax-tribunal-hr-mcp
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: MCP_SERVER
+        value: src.hr_main
+      - key: HTTP_MODE
+        value: "1"
+      - key: LAW_API_KEY
+        sync: false # 배포 시 Render 화면에서 직접 입력 (저장소에 키를 넣지 않음)
