@@ -95,6 +95,23 @@ cp .env.example .env   # LAW_API_KEY 설정 (https://open.law.go.kr 에서 발�
 Claude 웹/모바일에서 사용하려면 서버를 인터넷에서 접근 가능한 곳(Cloud Run,
 Render, 사내 서버 등)에 HTTP 모드로 배포해야 합니다.
 
+#### 가장 간단한 방법: Render 원클릭 배포 (무료)
+
+저장소 루트의 `render.yaml` 블루프린트를 사용합니다.
+
+1. https://render.com 에서 GitHub 계정으로 가입/로그인
+2. 대시보드에서 **New → Blueprint** 선택 후 이 저장소(`korean-law-mcp`) 연결
+   - 저장소가 공개(public)라면 다음 링크로 바로 시작할 수도 있습니다:
+     `https://render.com/deploy?repo=https://github.com/stephano0308-cloud/korean-law-mcp`
+3. 환경변수 입력 화면에서 `LAW_API_KEY`에 국가법령정보센터 인증키를 붙여넣기
+4. **Apply** 클릭 → 몇 분 뒤 `https://tax-tribunal-hr-mcp.onrender.com` 형태의 주소가 발급됨
+5. MCP 엔드포인트는 그 뒤에 `/mcp`를 붙인 주소: `https://tax-tribunal-hr-mcp.onrender.com/mcp`
+
+> 무료 플랜은 15분간 요청이 없으면 잠들었다가 첫 요청 시 약 30~60초 걸려 깨어납니다.
+> 업무 시간 중 상시 사용이 필요하면 유료 플랜(Starter)으로 올리면 됩니다.
+
+#### 수동 실행
+
 ```bash
 HTTP_MODE=1 PORT=8097 python -m src.hr_main
 # MCP 엔드포인트: http://<host>:8097/mcp
@@ -112,11 +129,21 @@ docker run --rm \
   korean-law-mcp
 ```
 
-배포 후 Claude 웹 → 설정 → 커넥터 → **커스텀 커넥터 추가**에서
-`https://<배포주소>/mcp`를 등록합니다.
+#### Claude 커넥터 등록
 
-> 참고: Claude 커넥터는 HTTPS를 요구하므로 실제 배포 시 TLS가 적용된
-> 도메인(또는 Cloud Run처럼 HTTPS를 기본 제공하는 플랫폼)을 사용하세요.
+배포가 끝나면 Claude 웹(claude.ai) → **설정 → 커넥터 → 커스텀 커넥터 추가**에서
+이름(예: 조세심판원 인사)과 원격 MCP 서버 URL `https://<배포주소>/mcp`를 등록합니다.
+등록 후 새 대화의 검색 도구 메뉴에서 커넥터를 켜면 사용할 수 있습니다.
+
+> 참고: Claude 커넥터는 HTTPS를 요구합니다. Render·Cloud Run은 HTTPS를 기본
+> 제공하므로 별도 설정이 필요 없습니다.
+
+#### API 키(OC) 확인 팁
+
+국가법령정보센터 Open API의 `OC` 값은 보통 **open.law.go.kr 가입 시 사용한
+이메일의 아이디 부분**입니다(예: `stephano0308@gmail.com` → `stephano0308`).
+발급받은 별도 키가 동작하지 않으면 이메일 아이디를 `LAW_API_KEY`로 넣어보세요.
+연결 후 Claude에서 `health` 도구와 "국가공무원법 검색해줘"로 동작을 확인할 수 있습니다.
 
 ### 4) 역할 지침 적용
 
