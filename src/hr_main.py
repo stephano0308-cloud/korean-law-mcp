@@ -332,8 +332,23 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8097"))
 
     if http_mode:
-        print(f"Starting HTTP MCP server on port {port} (endpoint: /mcp)", file=sys.stderr)
-        mcp.run(transport="http", host="0.0.0.0", port=port, path="/mcp")
+        # FastMCP 3.x는 DNS 리바인딩 보호로 localhost 외 Host 헤더를 421로 거부하므로,
+        # 외부 도메인 뒤에 배포할 때는 허용 호스트를 지정해야 한다.
+        # 기본값 "*"(공개 조회 전용 서버), ALLOWED_HOSTS 환경변수(쉼표 구분)로 제한 가능.
+        allowed_hosts = [
+            h.strip() for h in os.getenv("ALLOWED_HOSTS", "*").split(",") if h.strip()
+        ]
+        print(
+            f"Starting HTTP MCP server on port {port} (endpoint: /mcp, allowed_hosts: {allowed_hosts})",
+            file=sys.stderr,
+        )
+        mcp.run(
+            transport="http",
+            host="0.0.0.0",
+            port=port,
+            path="/mcp",
+            allowed_hosts=allowed_hosts,
+        )
     else:
         print("Starting STDIO MCP server", file=sys.stderr)
         mcp.run()
