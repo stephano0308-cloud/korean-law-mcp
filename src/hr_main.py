@@ -20,6 +20,8 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from .admin_rule_detail import get_administrative_rule_detail
 from .hr_keywords import suggest_keywords
@@ -59,16 +61,33 @@ def _load_instructions() -> str:
 # 상태·가이드 도구
 # ────────────────────────────────────────────────────────────────
 
-@mcp.tool()
-async def health():
-    """서비스 상태 및 API 키 설정 여부를 확인합니다."""
+def _health_data() -> dict:
     api_key = os.environ.get("LAW_API_KEY", "")
     return {
         "status": "ok",
         "service": "Tax Tribunal HR MCP Server (조세심판원 인사담당자 지원)",
         "law_api_key": "설정됨" if api_key else "설정되지 않음 (법령·예규 원문 조회 불가)",
         "instructions_file": "loaded" if INSTRUCTIONS_PATH.exists() else "missing",
+        "mcp_endpoint": "/mcp",
     }
+
+
+@mcp.custom_route("/", methods=["GET"])
+async def root_status(request: Request) -> JSONResponse:
+    """브라우저 접속용 상태 페이지. 커넥터 등록 전 서버 기동 확인에 사용."""
+    return JSONResponse(_health_data())
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_status(request: Request) -> JSONResponse:
+    """플랫폼 헬스체크 및 브라우저 확인용 엔드포인트."""
+    return JSONResponse(_health_data())
+
+
+@mcp.tool()
+async def health():
+    """서비스 상태 및 API 키 설정 여부를 확인합니다."""
+    return _health_data()
 
 
 @mcp.tool()
@@ -313,8 +332,8 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8097"))
 
     if http_mode:
-        print(f"Starting HTTP MCP server on port {port}", file=sys.stderr)
-        mcp.run(transport="http", host="0.0.0.0", port=port)
+        print(f"Starting HTTP MCP server on port {port} (endpoint: /mcp)", file=sys.stderr)
+        mcp.run(transport="http", host="0.0.0.0", port=port, path="/mcp")
     else:
         print("Starting STDIO MCP server", file=sys.stderr)
         mcp.run()
